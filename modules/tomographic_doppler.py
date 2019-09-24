@@ -23,16 +23,32 @@ class ska_spectroscopic_doppler_forecast(object):
 		self.bnu=bnu
 		self.dw=dw
 	
-	def evaluate_covariance_mat(self):
+	def calc_doppler_error(self,lmin=128,lmax=2048,nbin=10):
+		self.ell_max=np.linspace(lmin,lmax,nbin,dtype=np.int)
+		self.err=np.zeros(len(self.ell_max),dtype=np.float64)
+		e=np.ones(len(self.adr_d1d2),dtype=np.float64)
+		for i,iell in enumerate(self.ell_max):
+			self.evaluate_covariance_mat(lmax=iell)
+			self.cov_mat_inv=np.linalg.inv(self.cov_mat)
+			self.err[i]=1./np.dot(e,np.dot(self.cov_mat_inv,e))
+	
+	def evaluate_covariance_mat(self,lmax=[]):
 		'''Populate the covariance matrix'''
 		self.cov_mat=np.zeros((len(self.zpair),len(self.zpair)),dtype=np.float64)
 		self.cov_diag=np.zeros(len(self.zpair),dtype=np.float64)
+		
+		if lmax==[]:
+			lmax=self.lmax
+		elif lmax>self.lmax:
+				print "Error, lmax cannot be larger than", self.lmax
+				print "Setting lmax to largest possible lmax"
+				lmax=int(self.lmax)
 	
 		for i,zp1 in enumerate(self.zpair):
 			for ip,zp2 in enumerate(self.zpair[i:]):
 				j=ip+i
 				self.return_cls_for_estimators(i,j)
-				self.cov_mat[i,j]=cdc.cross_doppler_forecast(cl1=self.cl_est1,cl2=self.cl_est2,clc=self.cl_cross,bnu=self.bnu,dw=self.dw,lmax=int(self.lmax))
+				self.cov_mat[i,j]=cdc.cross_doppler_forecast(cl1=self.cl_est1[:,0:lmax+1],cl2=self.cl_est2[:,0:lmax+1],clc=self.cl_cross[:,0:lmax+1],bnu=self.bnu,dw=self.dw,lmax=int(lmax))
 				self.cov_mat[j,i]=self.cov_mat[i,j]
 				self.cov_diag[i]=adc.auto_doppler_forecast(cl=self.cl_est1,bnu=self.bnu,dw=self.dw,lmax=int(self.lmax))
 	
@@ -95,7 +111,7 @@ class ska_spectroscopic_doppler_forecast(object):
 #		self.adr_all_spec=self.adr_all_spec)
 		self.cls=collections.OrderedDict() ; self.nl=collections.OrderedDict()
 		for key in self.adr_all_spec:
-			keyp=key[3:] + "x" + key[0:2] ; print keyp,key
+			keyp=key[3:] + "x" + key[0:2] #; print keyp,key
 			for i,zp in enumerate(self.z_centroid):
 				if self.adr_g[zp] in key:
 					# Renormalizing the dg spectra
@@ -185,7 +201,7 @@ class ska_spectroscopic_doppler_forecast(object):
 		self.sigma_nu = (delta_nu*10.**(3.0))/(np.sqrt(8.*np.log(2.)))
 		self.sigma_z = ((1+z1)**2.)*(self.sigma_nu/(nu0*10.**(6.0)))
 
-	def init_camb(self,cos_par={},lmax=2000,limber_phi_lmin=20):
+	def init_camb(self,cos_par={},lmax=2048,limber_phi_lmin=20):
 		self.lmax=lmax ; self.ell=np.arange(0, self.lmax+1)
 		self.norm_ell=np.ones(np.size(self.ell),dtype=np.float64)
 		self.norm_ell[2:]=2.*np.pi/(self.ell[2:]*(self.ell[2:]+1.))

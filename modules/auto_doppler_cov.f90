@@ -1,3 +1,9 @@
+!##################################################################################################
+! Author : Aditya Rotti, Jodrell Bank Center for Astrophysics, University of Manchester
+! Date created:  19 September 2019
+! Date modified: 19 September 2019
+!##################################################################################################
+
 module auto_doppler_forecast
 
 implicit none

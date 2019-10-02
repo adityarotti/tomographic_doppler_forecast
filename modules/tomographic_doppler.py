@@ -12,6 +12,7 @@ from camb import model
 from itertools import product
 import auto_doppler_cov as adc
 import cross_doppler_cov as cdc
+from scipy.integrate import quad
 from scipy.interpolate import interp1d
 from camb.sources import GaussianSourceWindow, SplinedSourceWindow
 
@@ -23,14 +24,22 @@ class ska_spectroscopic_doppler_forecast(object):
 		self.bnu=bnu
 		self.dw=dw
 	
+		data=np.loadtxt("../data/fitting_data.txt")
+		self.fitc=collections.OrderedDict()
+		for i,uJy in enumerate(data[:,0]):
+			self.fitc[uJy]=data[i,1:]
+		self.flux_cutoff_options=self.fitc.keys()
+	
 	def calc_doppler_error(self,lmin=128,lmax=2048,nbin=10):
 		self.ell_max=np.linspace(lmin,lmax,nbin,dtype=np.int)
 		self.err=np.zeros(len(self.ell_max),dtype=np.float64)
+		self.simple_err=np.zeros(len(self.ell_max),dtype=np.float64)
 		e=np.ones(len(self.adr_d1d2),dtype=np.float64)
 		for i,iell in enumerate(self.ell_max):
 			self.evaluate_covariance_mat(lmax=iell)
 			self.cov_mat_inv=np.linalg.inv(self.cov_mat)
 			self.err[i]=1./np.dot(e,np.dot(self.cov_mat_inv,e))
+			self.simple_err[i]=1./np.dot(e,np.dot(np.linalg.inv(np.diag(np.diag(self.cov_mat))),e))
 	
 	def evaluate_covariance_mat(self,lmax=[]):
 		'''Populate the covariance matrix'''
@@ -48,13 +57,13 @@ class ska_spectroscopic_doppler_forecast(object):
 			for ip,zp2 in enumerate(self.zpair[i:]):
 				j=ip+i
 				self.return_cls_for_estimators(i,j)
-				self.cov_mat[i,j]=cdc.cross_doppler_forecast(cl1=self.cl_est1[:,0:lmax+1],cl2=self.cl_est2[:,0:lmax+1],clc=self.cl_cross[:,0:lmax+1],bnu=self.bnu,dw=self.dw,lmax=int(lmax))
+				self.cov_mat[i,j]=cdc.cross_doppler_forecast(cl1=self.cl_est1[:,0:lmax+1],cl2=self.cl_est2[:,0:lmax+1],clc=self.cl_cross[:,0:lmax+1],bnu=self.bnu,dw=self.dw,lmax=int(lmax))/self.fsky
 				self.cov_mat[j,i]=self.cov_mat[i,j]
 				self.cov_diag[i]=adc.auto_doppler_forecast(cl=self.cl_est1,bnu=self.bnu,dw=self.dw,lmax=int(self.lmax))
 	
 					
 	def return_cls_for_estimators(self,zp1,zp2):
-		key=self.adr_d1d2[zp1] ; w1=key[0:2] ; w2=key[3:]
+		key=self.adr_d1d2[zp1] ; idx=key.find("x") ; w1=key[0:idx] ; w2=key[idx+1:]
 		self.auto_cov_key1=[w1+"x"+w1,w2+"x"+w2,w1+"x"+w2]
 		self.cl_est1=np.zeros((5,self.lmax+1),dtype=np.float64)
 		self.cl_est1[0,]=self.cls[key]-(self.cls[self.adr_dg[zp1][0]]+self.cls[self.adr_dg[zp1][1]])/2. # Modulation Est1
@@ -63,11 +72,14 @@ class ska_spectroscopic_doppler_forecast(object):
 			self.cl_est1[ip+2,:]=self.cls[ckey] + self.nl[ckey]
 
 	
-		key=self.adr_d1d2[zp2] ; w3=key[0:2] ; w4=key[3:]
+		key=self.adr_d1d2[zp2] ; idx=key.find("x") ; w3=key[0:idx] ; w4=key[idx+1:]
 		self.auto_cov_key2=[w3+"x"+w3,w4+"x"+w4,w3+"x"+w4]
 		self.cl_est2=np.zeros((5,self.lmax+1),dtype=np.float64)
-		self.cl_est2[0,]=self.cls[key]-(self.cls[self.adr_dg[zp2][0]]+self.cls[self.adr_dg[zp2][1]])/2. # Modulation Est2
-		self.cl_est2[1,]=self.cls[key] # Aberration Est2
+		if self.nzbin>1:
+			self.cl_est2[0,]=self.cls[key]-(self.cls[self.adr_dg[zp2][0]]+self.cls[self.adr_dg[zp2][1]])/2. # Modulation Est2
+		else:
+			self.cl_est2[0,]=self.cls[key] 	# Modulation Est2
+		self.cl_est2[1,]=self.cls[key] 		# Aberration Est2
 		for ip, ckey in enumerate(self.auto_cov_key2):
 			self.cl_est2[ip+2,:]=self.cls[ckey] + self.nl[ckey]
 
@@ -111,7 +123,8 @@ class ska_spectroscopic_doppler_forecast(object):
 #		self.adr_all_spec=self.adr_all_spec)
 		self.cls=collections.OrderedDict() ; self.nl=collections.OrderedDict()
 		for key in self.adr_all_spec:
-			keyp=key[3:] + "x" + key[0:2] #; print keyp,key
+			idx=key.find("x")
+			keyp=key[idx+1:] + "x" + key[0:idx] #; print keyp,key
 			for i,zp in enumerate(self.z_centroid):
 				if self.adr_g[zp] in key:
 					# Renormalizing the dg spectra
@@ -131,44 +144,71 @@ class ska_spectroscopic_doppler_forecast(object):
 			if key in self.adr_auto.values():
 				# The auto correlation noise power spectrum.
 				# This needs to be updated with the mean number of galaxies per steradian in the particular redshift bin.
-				self.nl[key]=np.ones_like(self.cls[key])*0.
+				idx=key.find("x") ; d_adr=key[0:idx] ; z_idx=(self.adr_d.values()).index(d_adr)
+				self.nl[key]=np.ones_like(self.cls[key])/self.nbar[self.z_centroid[z_idx]]
 				self.nl[keyp]=self.nl[key]
 			else:
 				# The cross correlation noise power spectrum, assumed to be zero.
 				self.nl[key]=np.zeros_like(self.cls[key])
 				self.nl[keyp]=self.nl[key]
 				
-	def setup_window_functions(self,zmin=0.1, zmax=2.9, nzbin=5, z_step=1e-4, z_olap=0.1, wtype="tanh", taper_width=0.01,normalize=False):
-		self.zmin=zmin ; self.zmax=zmax ; self.nzbin=nzbin ; self.z_step=z_step
-		self.z_olap=z_olap ; self.taper_width=taper_width
+	def setup_obs_param(self,flux_cutoff,zmin=0.1, zmax=2.9,z_step=1e-4,area_obs=30000.):
+		self.flux_cut=flux_cutoff
+		self.area_obs=area_obs # Square degrees
+		self.total_sky_area=4.*np.pi*(180./np.pi)**2.
+		self.fsky=self.area_obs/self.total_sky_area
+		self.zmin=zmin ; self.zmax=zmax ; self.z_step=z_step
+		self.z=np.arange(self.zmin,self.zmax+self.z_step,self.z_step)
+		self.c1=self.fitc[self.flux_cut][0]
+		self.c2=self.fitc[self.flux_cut][1]
+		self.c3=self.fitc[self.flux_cut][2]
+		self.c4=self.fitc[self.flux_cut][3]
+		self.c5=self.fitc[self.flux_cut][4]
+		self.dndz=self.return_dndz(self.z)*self.fsky
+		self.total_gal_num=self.return_integral(self.z,self.dndz)
+				
+	def setup_window_functions(self, nzbin=5, z_olap=0.1, wtype="tanh", taper_width=0.01,normalize=False):
+		self.nzbin=nzbin ; self.z_olap=z_olap ; self.taper_width=taper_width
 		z_edge = np.linspace(self.zmin+5*self.taper_width, self.zmax-5*self.taper_width, self.nzbin+1) # Bin edges
 		self.z_bin=zip(z_edge[:-1]-z_olap/2.,z_edge[1:]+z_olap/2.)
+		self.dz=np.mean([zbin[1]-zbin[0] for zbin in self.z_bin])
 		self.z_centroid=np.zeros(len(self.z_bin))
 		
 		self.bias=collections.OrderedDict()
 		self.magnification=collections.OrderedDict()
 		for i in range(len(self.z_bin)):
 			self.z_centroid[i]=np.mean(self.z_bin[i])
-			self.bias[self.z_centroid[i]]=self.return_bias_z0ujy(self.z_centroid[i])
+			self.bias[self.z_centroid[i]]=self.return_bias(self.z_centroid[i])
 			self.magnification[self.z_centroid[i]]=0.
-		
-		self.z=np.arange(self.zmin,self.zmax+self.z_step,self.z_step)
-		self.dndz=self.return_dndz(self.z)
-		
+	
 		self.total_window=np.zeros_like(self.z)
+		self.tom_window=collections.OrderedDict()
 		self.window=collections.OrderedDict() ; self.dwindow=collections.OrderedDict()
 		self.window_norm=collections.OrderedDict()
 		self.dwindow_norm=collections.OrderedDict()
+		self.nbar=collections.OrderedDict()
 		for i,zp in enumerate(self.z_centroid):
-			self.window[zp]=self.return_tanh_window(self.z,self.z_bin[i][0],self.z_bin[i][1],taper_width=self.taper_width)*self.dndz
+			self.tom_window[zp]=self.return_tanh_window(self.z,self.z_bin[i][0],self.z_bin[i][1],taper_width=self.taper_width)
+			self.tom_window[zp]=self.tom_window[zp]/self.return_integral(self.z,self.tom_window[zp])
+			self.window[zp]=self.tom_window[zp]*self.dndz ; self.nbar[zp]=self.return_integral(self.z,self.window[zp])
 			self.dwindow[zp]=self.return_derivative(self.z,self.window[zp]*(1.+self.z),eps=self.z_step)
-			self.window_norm[zp]=np.sum(self.window[zp])*self.z_step
-			self.dwindow_norm[zp]=np.sum(self.dwindow[zp])*self.z_step
+			self.window_norm[zp]=self.return_integral(self.z,self.window[zp])
+			self.dwindow_norm[zp]=self.return_integral(self.z,self.dwindow[zp])
 			if normalize:
 				self.window[zp]=self.window[zp]/self.window_norm[zp]
 				self.dwindow[zp]=self.dwindow[zp]/self.window_norm[zp]
 			self.total_window=self.total_window + self.window[zp]
-
+		
+		# This is currently typically greater than unity because of the overlapping window functions
+		self.gal_num_error_est=np.sum(self.nbar.values())/self.return_integral(self.z,self.dndz)
+		self.total_window=self.total_window/self.gal_num_error_est
+		self.gal_num_error_est_iter1=np.sum(np.array(self.nbar.values()))/self.return_integral(self.z,self.dndz)
+		
+		# Here we ensure that the total number of galaxies is not exceded.
+		for i,zp in enumerate(self.z_centroid):
+			self.nbar[zp]=self.nbar[zp]/self.gal_num_error_est_iter1
+			
+		self.gal_num_error_est=np.sum(np.array(self.nbar.values()))/self.return_integral(self.z,self.dndz)
 	# Window function related functions
 	def return_tanh_window(self,z,zmin,zmax,taper_width=0.01):
 		wL = (z-zmin)/taper_width
@@ -180,16 +220,15 @@ class ska_spectroscopic_doppler_forecast(object):
 		f=interp1d(x,y,kind="cubic",bounds_error=False,fill_value="extrapolate")
 		fprime=(f(x+eps)-f(x-eps))/(2.*eps)
 		return fprime
-	
-	#clustering bias function, (4.2) in  1501.03990
-	def return_bias_z0ujy(self,z):
-		return 0.8695*np.exp(z*0.2338)
 
-	# Mean number of galaxies per ????
+	def return_bias(self,z):
+		bias=self.c4*np.exp(z*self.c5)
+		return bias
+	
 	def return_dndz(self,z):
-		# This needs to be appropriately normalized to estimate the poisson noise.
-		norm=((180./np.pi)**2.)*(3600.)
-		dndz = (1./norm)*pow(10,6.23)*pow(z,1.82)*np.exp(-0.98*z)
+		# Without the normalization the function returns galaxy number density / deg^2
+		norm=(180./np.pi)**2.
+		dndz=norm*pow(10.,self.c1)*pow(z,self.c2)*np.exp(-self.c3*z)
 		return dndz
 	
 	def setup_radial_res(self,nu0=1420.,delta_nu=12.8,z1=1.1):
@@ -240,3 +279,21 @@ class ska_spectroscopic_doppler_forecast(object):
 		counts_ISW=True,
 		counts_potential=True,
 		counts_evolve=False)
+
+	def return_integral(self,x,y):
+		fn=interp1d(x,y,kind="cubic",bounds_error=None,fill_value="extrapolate")
+		ans,err=quad(fn,min(x),max(x))
+		return ans
+
+#	Obsolete functions
+#
+#	#clustering bias function, (4.2) in  1501.03990
+#	def return_bias_z0ujy(self,z):
+#		return 0.8695*np.exp(z*0.2338)
+#
+#	# Mean number of galaxies per ????
+#	def return_dndz_0ujy(self,z):
+#		# This needs to be appropriately normalized to estimate the poisson noise.
+#		norm=((180./np.pi)**2.)*(3600.)
+#		dndz = (1./norm)*pow(10,6.23)*pow(z,1.82)*np.exp(-0.98*z)
+#		return dndz

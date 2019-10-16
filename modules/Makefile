@@ -11,7 +11,7 @@ all:bips
 bips:bipsobj
 	f2py -c --fcompiler=gfortran *.o -m cross_doppler_cov $(modules)/cross_doppler_cov.f90
 	#f2py -c --fcompiler=gfortran *.o -m auto_doppler_cov $(modules)/auto_doppler_cov.f90
-
+	make clean
 bipsobj:
 	$(FC) -c $(F90flags) $(subroutines)/wigner/*.f 	
 

@@ -66,7 +66,7 @@ class ska_spectroscopic_doppler_forecast(object):
 		key=self.adr_d1d2[zp1] ; idx=key.find("x") ; w1=key[0:idx] ; w2=key[idx+1:]
 		self.auto_cov_key1=[w1+"x"+w1,w2+"x"+w2,w1+"x"+w2]
 		self.cl_est1=np.zeros((5,self.lmax+1),dtype=np.float64)
-		if self.nzbin>1:
+		if w1!=w2:
 			self.cl_est1[0,]=self.cls[key]-(self.cls[self.adr_dg[zp1][0]]+self.cls[self.adr_dg[zp1][1]])/(2.*self.bnu) # Modulation Est1
 		else:
 			self.cl_est1[0,]=self.cls[key] # Modulation Est1
@@ -78,7 +78,7 @@ class ska_spectroscopic_doppler_forecast(object):
 		key=self.adr_d1d2[zp2] ; idx=key.find("x") ; w3=key[0:idx] ; w4=key[idx+1:]
 		self.auto_cov_key2=[w3+"x"+w3,w4+"x"+w4,w3+"x"+w4]
 		self.cl_est2=np.zeros((5,self.lmax+1),dtype=np.float64)
-		if self.nzbin>1:
+		if w3!=w4:
 			self.cl_est2[0,]=self.cls[key]-(self.cls[self.adr_dg[zp2][0]]+self.cls[self.adr_dg[zp2][1]])/(2.*self.bnu) # Modulation Est2
 		else:
 			self.cl_est2[0,]=self.cls[key] 	# Modulation Est2
